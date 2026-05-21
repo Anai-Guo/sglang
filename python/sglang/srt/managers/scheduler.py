@@ -827,7 +827,14 @@ class Scheduler(
             self.model_config.hf_config, "text_config", self.model_config.hf_config
         )
 
-        if hasattr(config_to_check, "num_experts_per_tok"):
+        # Different MoE architectures expose the per-token expert count under
+        # different attribute names (e.g. Gemma4 uses ``top_k_experts``).
+        moe_topk_attrs = (
+            "num_experts_per_tok",
+            "num_experts_per_token",
+            "top_k_experts",
+        )
+        if any(hasattr(config_to_check, attr) for attr in moe_topk_attrs):
             initialize_moe_config(self.server_args)
 
         # Initialize GEMM-related configuration for FP8 and FP4 backends.
@@ -2835,13 +2842,12 @@ class Scheduler(
         # Run forward
         if self.is_generation:
             if self.enable_overlap:
-                # Spec v2 pre-isolation CPU mirror prep: D2H new_seq_lens_buf
-                # into batch.seq_lens_cpu + set seq_lens_sum. For non-spec_v2,
-                # ForwardBatch.init_new lazily computes the sum.
-                # SGLANG_SPEC_V2_NO_VERIFY_SYNC skips this D2H entirely; downstream
-                # uses the gpu_only path in prepare_for_extend_to_fill_draft_kvcache.
-                if batch.is_spec_v2 and not envs.SGLANG_SPEC_V2_NO_VERIFY_SYNC.get():
-                    # FIXME: make this optional to different backends.
+                # Self-gates on batch.spec_info.future_indices; non-spec_v2
+                # no-ops (ForwardBatch.init_new lazily computes the sum).
+                # SGLANG_SPEC_V2_NO_VERIFY_SYNC skips this D2H entirely;
+                # downstream uses the gpu_only path in
+                # prepare_for_extend_to_fill_draft_kvcache.
+                if not envs.SGLANG_SPEC_V2_NO_VERIFY_SYNC.get():
                     self.future_map.resolve_seq_lens_cpu(batch)
 
                 with self._overlap_forward_isolation(batch):
@@ -2851,11 +2857,7 @@ class Scheduler(
                     # draft_extend; publish moves the fence to verify-end so
                     # schedule prep can overlap with draft_extend.
                     fwd_kwargs = (
-                        {
-                            "on_verify_complete": partial(
-                                self.future_map.publish, future_indices
-                            )
-                        }
+                        {"on_publish": partial(self.future_map.publish, future_indices)}
                         if batch.is_spec_v2
                         else {}
                     )
@@ -2891,7 +2893,7 @@ class Scheduler(
                             batch_result.future_indices = future_indices
 
                 # Placeholder for next iter's resolve_future to look up the
-                # real token from token_ids_buf via the negated indices.
+                # real token from output_tokens_buf via the negated indices.
                 batch.input_ids = -future_indices.indices
 
                 if batch.is_spec_v2:
