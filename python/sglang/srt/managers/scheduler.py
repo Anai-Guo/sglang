@@ -2845,11 +2845,14 @@ class Scheduler(
             if self.enable_overlap:
                 # Self-gates on batch.spec_info.future_indices; non-spec_v2
                 # no-ops (ForwardBatch.init_new lazily computes the sum).
-                # SGLANG_SPEC_V2_NO_VERIFY_SYNC skips this D2H entirely;
-                # downstream uses the gpu_only path in
-                # prepare_for_extend_to_fill_draft_kvcache.
-                if not envs.SGLANG_SPEC_V2_NO_VERIFY_SYNC.get():
-                    self.future_map.resolve_seq_lens_cpu(batch)
+                # SGLANG_SPEC_V2_NO_VERIFY_SYNC keeps the GPU gather (needed
+                # for correctness — batch.seq_lens must advance by accept_lens
+                # each iter) but skips the .cpu() D2H; downstream uses the
+                # gpu_only path in prepare_for_extend_to_fill_draft_kvcache
+                # and prepare_for_v2_verify.
+                self.future_map.resolve_seq_lens(
+                    batch, gpu_only=envs.SGLANG_SPEC_V2_NO_VERIFY_SYNC.get()
+                )
 
                 with self._overlap_forward_isolation(batch):
                     future_indices = batch.req_pool_indices

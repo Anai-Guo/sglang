@@ -153,10 +153,12 @@ class FutureMap:
         # input_ids; resolve_future translates negatives via output_tokens_buf.
         batch.input_ids = -future_indices
 
-    def resolve_seq_lens_cpu(self, batch: ScheduleBatch) -> None:
+    def resolve_seq_lens(self, batch: ScheduleBatch, gpu_only: bool = False) -> None:
         # Lazy pull from new_seq_lens_buf for spec_v2 (accept_lens not known to
-        # schedule). Write into both CPU and GPU so SB.seq_lens stays a faithful
-        # seq_lens_cpu mirror.
+        # schedule). The GPU gather is required for correctness so SB.seq_lens
+        # advances after each verify; only the .cpu() D2H is opt-out via
+        # gpu_only (SGLANG_SPEC_V2_NO_VERIFY_SYNC). When gpu_only, leave the
+        # CPU mirror / sum as None so downstream takes the device-only path.
         fi = batch.spec_info.future_indices if batch.spec_info is not None else None
         if fi is None:
             return
@@ -164,8 +166,12 @@ class FutureMap:
             self.publish_ready.wait()
         new_seq_lens = self.new_seq_lens_buf[fi]
         batch.seq_lens = new_seq_lens
-        batch.seq_lens_cpu = new_seq_lens.cpu()
-        batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
+        if gpu_only:
+            batch.seq_lens_cpu = None
+            batch.seq_lens_sum = None
+        else:
+            batch.seq_lens_cpu = new_seq_lens.cpu()
+            batch.seq_lens_sum = int(batch.seq_lens_cpu.sum())
 
     def publish(self, future_indices: torch.Tensor, new_seq_lens: torch.Tensor) -> None:
         indices = future_indices

@@ -230,13 +230,20 @@ class EagleDraftInputV2Mixin:
 
         batch.spec_info = self
         batch.input_ids = predict
-        batch.extend_lens = [num_draft_tokens for _ in range(len(batch.seq_lens))]
+        # ForwardBatch.init_new requires extend_seq_lens / extend_prefix_lens
+        # to be either both list or both Tensor; gpu_only emits device tensors
+        # to bypass H2D copies entirely.
         if gpu_only:
-            prefix_lens_gpu = batch.seq_lens.to(torch.int32)
-            batch.prefix_lens = prefix_lens_gpu
+            batch.prefix_lens = batch.seq_lens.to(torch.int32)
+            batch.extend_lens = torch.full(
+                (bs,),
+                num_draft_tokens,
+                dtype=torch.int32,
+                device=batch.seq_lens.device,
+            )
         else:
-            seq_lens_cpu_ = batch.seq_lens_cpu
-            batch.prefix_lens = seq_lens_cpu_.tolist()
+            batch.prefix_lens = batch.seq_lens_cpu.tolist()
+            batch.extend_lens = [num_draft_tokens] * bs
         batch.extend_num_tokens = extend_num_tokens
         capture_mode = (
             CaptureHiddenMode.NULL
@@ -291,10 +298,16 @@ class EagleVerifyInputV2Mixin:
                 batch.mamba_track_mask = None
                 batch.mamba_track_seqlens = None
 
-            # Populate seq_lens_cpu/seq_lens_sum on the verify input so that
-            # TBO's split_spec_info can slice the custom_mask correctly.
+            # Populate seq_lens_cpu/seq_lens_sum on the verify input so TBO's
+            # split_spec_info can slice the custom_mask correctly. Under
+            # SGLANG_SPEC_V2_NO_VERIFY_SYNC both stay None — TBO is incompatible
+            # with the no-sync path.
             self.seq_lens_cpu = batch.seq_lens_cpu
-            self.seq_lens_sum = int(batch.seq_lens_cpu.sum())
+            self.seq_lens_sum = (
+                int(batch.seq_lens_cpu.sum())
+                if batch.seq_lens_cpu is not None
+                else None
+            )
 
         # Get a forward batch
         batch.forward_mode = (
