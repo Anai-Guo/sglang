@@ -131,12 +131,7 @@ class TritonAttnBackend(AttentionBackend):
         if self.sliding_window_size is not None and swa_v_head_dim != full_v_head_dim:
             self.v_head_dim = full_v_head_dim
             self.swa_v_head_dim = swa_v_head_dim
-        elif (
-            model_runner.hybrid_gdn_config is not None
-            or model_runner.kimi_linear_config is not None
-            or model_runner.linear_attn_model_spec is not None
-        ):
-            # For hybrid linear models, layer_id = 0 may not be full attention
+        elif model_runner.mambaish_config is not None:
             self.v_head_dim = model_runner.token_to_kv_pool.get_v_head_dim()
             self.swa_v_head_dim = None
         else:
