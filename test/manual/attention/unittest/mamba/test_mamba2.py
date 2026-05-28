@@ -1,6 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import torch
@@ -310,7 +311,13 @@ class TestTritonMamba2BackendCorrectness(CustomTestCase):
         backend, full_attn_backend, linear_attn_backend = (
             self._make_dispatch_spy_backend()
         )
-        sentinel_forward_batch = object()
+        # Sentinel exposes the attribute production reads at the dispatch
+        # gate (`forward_mode.is_draft_extend_v2()`); returns False so the
+        # fan-out path that delegates to both children is exercised, which
+        # is what these spy tests assert.
+        sentinel_forward_batch = SimpleNamespace(
+            forward_mode=SimpleNamespace(is_draft_extend_v2=lambda: False)
+        )
         backend.init_forward_metadata(sentinel_forward_batch)
         self._assert_fanout_forwarded(
             full_attn_backend.init_forward_metadata, sentinel_forward_batch
