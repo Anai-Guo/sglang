@@ -556,6 +556,7 @@ class ProjectedMamba2Attention(nn.Module):
             hidden_states,
             output,
             layer_id=0,
+            forward_batch=forward_batch,
             use_triton_causal_conv=use_triton_causal_conv,
         )
         return output
