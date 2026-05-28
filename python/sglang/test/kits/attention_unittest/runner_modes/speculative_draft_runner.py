@@ -1345,27 +1345,15 @@ def _init_dsv4_eager_metadata(
 ) -> None:
     """Per-step DSV4 init for the eager comparison path.
 
-    `DeepseekV4AttnBackend.init_forward_metadata_decode` strictly asserts
-    `out_cache_loc.shape[0] == bs`, but the multi-step draft batch carries
-    `bs * topk * num_steps` cache locs. Mirror the production semantics by
-    initializing each step's backend with the step-specific cache loc
-    slice; production EAGLE worker overwrites `forward_batch.out_cache_loc`
-    before each per-step forward.
+    After PR #26239 `DeepseekV4AttnBackend.init_forward_metadata` slices the
+    multi-step `out_cache_loc` internally using `self.speculative_step_id`
+    (each per-step backend in `multi_step_backend.attn_backends[i]` was
+    constructed with `speculative_step_id=i`). Pass the full
+    `bs * topk * num_steps` buffer through each per-step init unchanged.
     """
-    bs = batch.batch_size
-    topk = settings.topk
     multi_step_backend = worker.draft_attn_backend
-    full_out = batch.out_cache_loc
-    per_step = full_out.reshape(bs, topk, settings.speculative_num_steps).permute(
-        (2, 0, 1)
-    ).reshape(settings.speculative_num_steps, -1)
-    saved_out = batch.out_cache_loc
-    try:
-        for i, attn_backend in enumerate(multi_step_backend.attn_backends):
-            batch.out_cache_loc = per_step[i]
-            attn_backend.init_forward_metadata(batch)
-    finally:
-        batch.out_cache_loc = saved_out
+    for attn_backend in multi_step_backend.attn_backends:
+        attn_backend.init_forward_metadata(batch)
 
 def _make_dsv4_eagle_draft_forward_batch(
     case: DSV4AttentionCase,
